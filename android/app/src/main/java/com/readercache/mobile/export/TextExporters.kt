@@ -1,4 +1,4 @@
-"""TXT、Markdown 与 XHTML 导出策略，行为与桌面版 exporters/text.py 一致。"""
+// TXT、Markdown 与 XHTML 导出策略，行为与桌面版 exporters/text.py 一致。
 
 package com.readercache.mobile.export
 
@@ -26,7 +26,7 @@ object TextExporter {
         val paths = mutableListOf<File>()
         book.chapters.forEachIndexed { index, chapter ->
             val content = chapter.title + "\n\n" + bodyWithoutHeading(chapter)
-            val path = File(chapterDir, "%04d_${safeName(chapter.title)}.txt".format(index + 1))
+            val path = File(chapterDir, paddedIndex(index + 1) + "_" + safeName(chapter.title) + ".txt")
             writeText(path, content)
             paths.add(path)
             parts.add(content)
@@ -63,7 +63,7 @@ object XhtmlExporter {
         val files = mutableListOf<File>()
         val normalizedNames = mutableSetOf<String>()
         book.chapters.forEachIndexed { index, chapter ->
-            val name = "chapter-%04d.xhtml".format(index + 1)
+            val name = "chapter-${paddedIndex(index + 1)}.xhtml"
             val normalized = name.lowercase()
             if (!normalizedNames.add(normalized)) {
                 throw ReaderCacheError("资源名称在Windows中产生大小写碰撞：$name")

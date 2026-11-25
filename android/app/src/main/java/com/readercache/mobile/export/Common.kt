@@ -1,4 +1,4 @@
-"""导出器共享的命名、范围说明及文本处理函数，行为与桌面版 exporters/common.py 一致。"""
+// 导出器共享的命名、范围说明及文本处理函数，行为与桌面版 exporters/common.py 一致。
 
 package com.readercache.mobile.export
 
@@ -30,6 +30,9 @@ fun safeName(value: String): String {
     }
     return result
 }
+
+/** 与桌面版一致的 ASCII 四位序号，避免设备区域设置改变数字字符。 */
+fun paddedIndex(value: Int): String = String.format(java.util.Locale.US, "%04d", value)
 
 /** 生成标识缓存范围的书籍文件名。 */
 fun fileStem(book: BookDocument): String =

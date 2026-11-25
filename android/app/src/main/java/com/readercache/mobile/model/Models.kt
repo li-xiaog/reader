@@ -1,4 +1,4 @@
-"""领域模型：与桌面版 models.py 对齐的统一书籍与章节结构。"""
+// 领域模型：与桌面版 models.py 对齐的统一书籍与章节结构。
 
 package com.readercache.mobile.model
 

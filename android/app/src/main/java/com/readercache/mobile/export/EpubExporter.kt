@@ -1,4 +1,4 @@
-"""EPUB 3 导出策略：由真实正文生成章节页，并验证容器、清单与阅读顺序。"""
+// EPUB 3 导出策略：由真实正文生成章节页，并验证容器、清单与阅读顺序。
 
 package com.readercache.mobile.export
 
@@ -212,7 +212,7 @@ object EpubExporter {
         val spine = mutableListOf<String>()
         val navigation = mutableListOf<String>()
         book.chapters.forEachIndexed { index, chapter ->
-            val path = "text/chapter-%04d.xhtml".format(index + 1)
+            val path = "text/chapter-${paddedIndex(index + 1)}.xhtml"
             assets[path] = chapterXhtml(chapter)
             navigation.add(path)
             spine.add(path)

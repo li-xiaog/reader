@@ -1,4 +1,4 @@
-"""起点缓存解码器：复现已验证 APK 本地读取逻辑，行为与桌面版 codecs/qidian.py 一致。"""
+// 起点缓存解码器：复现已验证 APK 本地读取逻辑，行为与桌面版 codecs/qidian.py 一致。
 
 package com.readercache.mobile.qidian
 
@@ -7,8 +7,8 @@ import java.security.MessageDigest
 import java.util.Base64
 import javax.crypto.Cipher
 import javax.crypto.Mac
-import javax.crypto.SecretKeySpec
 import javax.crypto.spec.IvParameterSpec
+import javax.crypto.spec.SecretKeySpec
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -30,7 +30,7 @@ data class DecodedChapter(
 private class CacheFields(val fields: List<ByteArray>, val trailing: Int)
 
 /** 按应用读取顺序解析五个带长度的二进制字段；截断或未支持格式直接报错。 */
-fun readCacheFields(raw: ByteArray): CacheFields {
+private fun readCacheFields(raw: ByteArray): CacheFields {
     var position = 0
     val fields = mutableListOf<ByteArray>()
     repeat(5) {
