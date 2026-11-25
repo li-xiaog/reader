@@ -21,13 +21,15 @@ jobs:
         uses: actions/checkout@v4
 
       - name: 安装 JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
 
+      # v3 自 2026-09 起因 Google 停供旧版 tools 包而全局失败，v4.0.2+ 已修复，
+      # 升级到 v4 才能继续准备 Android SDK。
       - name: 准备 Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
 
       - name: 准备 Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
