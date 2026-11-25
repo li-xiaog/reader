@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "reader-cache-toolkit"
+version = "0.1.0"
+description = "本地安卓阅读缓存备份与多格式导出工具"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "cryptography==48.0.0",
+  "beautifulsoup4==4.14.3",
+  "lxml==6.0.2",
+]
+
+[project.optional-dependencies]
+dev = ["ruff>=0.12,<1", "build>=1.2,<2", "pyinstaller>=6.14,<7"]
+
+[project.scripts]
+reader-cache = "reader_cache_toolkit.cli:main"
+
+[project.gui-scripts]
+reader-cache-desktop = "reader_cache_toolkit.ui.desktop:run_gui"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 110
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "UP"]
+
+[tool.ruff.format]
+quote-style = "double"

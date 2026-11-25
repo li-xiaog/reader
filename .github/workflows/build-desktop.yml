@@ -1,0 +1,75 @@
+name: build-desktop
+
+# 云端自动打包 Windows 桌面程序：任意分支推送可出产物，打 v* 标签时同时发布 Release。
+on:
+  push:
+    branches:
+      - '**'
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: 打包 Windows 桌面程序
+    runs-on: windows-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Python 3.12（含 tkinter）
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.lock
+          python -m pip install -e .
+
+      - name: Ruff 静态检查
+        run: python -m ruff check src scripts
+
+      - name: 生成应用图标（缺失时兜底重建）
+        shell: pwsh
+        run: |
+          if (Test-Path 'src/reader_cache_toolkit/assets/app.ico') {
+            Write-Host '应用图标已存在，跳过生成。'
+          } else {
+            python -m pip install pillow
+            python scripts/make_icon.py
+          }
+
+      - name: 打包目录版与单文件版
+        shell: pwsh
+        run: ./scripts/build-desktop.ps1
+
+      - name: 归档打包产物
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist/ReaderCacheToolkit/* -DestinationPath dist/ReaderCacheToolkit-windows-dir.zip -Force
+          Compress-Archive -Path dist/ReaderCacheToolkit-OneFile.exe -DestinationPath dist/ReaderCacheToolkit-windows-onefile.zip -Force
+          Get-ChildItem dist | Select-Object Name, Length
+
+      - name: 上传构建产物（Actions 页可下载）
+        uses: actions/upload-artifact@v4
+        with:
+          name: ReaderCacheToolkit-${{ github.sha }}
+          path: |
+            dist/ReaderCacheToolkit-windows-dir.zip
+            dist/ReaderCacheToolkit-windows-onefile.zip
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: 发布 Release（仅在推送 v* 标签时）
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/ReaderCacheToolkit-windows-dir.zip
+            dist/ReaderCacheToolkit-windows-onefile.zip
+          generate_release_notes: true

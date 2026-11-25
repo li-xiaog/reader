@@ -1,0 +1,59 @@
+name: build-android
+
+# 云端自动打包 Android APK：任意分支推送可出产物，打 v* 标签时同时发布 Release。
+on:
+  push:
+    branches:
+      - '**'
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-apk:
+    name: 打包 Android APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: 准备 Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: 准备 Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: 构建 Debug APK
+        run: gradle -p android assembleDebug --no-daemon
+
+      - name: 归集打包产物
+        run: |
+          mkdir -p dist
+          cp android/app/build/outputs/apk/debug/app-debug.apk dist/ReaderCacheToolkit-mobile-debug.apk
+          ls -lh dist
+
+      - name: 上传构建产物（Actions 页可下载）
+        uses: actions/upload-artifact@v4
+        with:
+          name: ReaderCacheToolkit-android-${{ github.sha }}
+          path: dist/ReaderCacheToolkit-mobile-debug.apk
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: 发布 Release（仅在推送 v* 标签时）
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/ReaderCacheToolkit-mobile-debug.apk
+          generate_release_notes: true

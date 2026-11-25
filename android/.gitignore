@@ -1,0 +1,8 @@
+# Android 工程构建产物
+.gradle/
+build/
+local.properties
+*.apk.idsig
+captures/
+.externalNativeBuild/
+.cxx/
