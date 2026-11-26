@@ -1,4 +1,4 @@
-// 单页桌面界面：选择备份目录、扫描书籍、选择格式并导出；后台协程执行，主线程更新。
+"""单页桌面界面：选择备份目录、扫描书籍、选择格式并导出；后台协程执行，主线程更新。"""
 
 package com.readercache.mobile
 
@@ -81,6 +81,17 @@ class MainActivity : AppCompatActivity() {
         cbComplete = findViewById(R.id.cb_complete)
         tvLog.movementMethod = ScrollingMovementMethod()
 
+        // 显示真实版本号，便于区分安装的构建版本。
+        val subtitle = findViewById<TextView>(R.id.tv_subtitle)
+        val versionName = try {
+            packageManager.getPackageInfo(packageName, 0).versionName
+        } catch (error: Exception) {
+            ""
+        }
+        if (!versionName.isNullOrBlank()) {
+            subtitle.text = getString(R.string.subtitle) + " · v$versionName"
+        }
+
         btnSelectSource.setOnClickListener {
             sourceLauncher.launch(null)
         }
@@ -134,10 +145,13 @@ class MainActivity : AppCompatActivity() {
     private fun scanBackup(uri: Uri) {
         setBusy(true)
         setStatus("正在扫描备份目录…")
+        appendLog("开始扫描所选目录…")
         lifecycleScope.launch {
             try {
                 val found = withContext(Dispatchers.IO) {
-                    QidianBackupReader.scan(this@MainActivity, uri)
+                    QidianBackupReader.scan(this@MainActivity, uri) { message ->
+                        runOnUiThread { appendLog(message) }
+                    }
                 }
                 books = found
                 val labels = found.map { "${it.title}（${it.bookId}）" }
@@ -148,7 +162,7 @@ class MainActivity : AppCompatActivity() {
                 )
                 showBookInfo(0)
                 setBusy(false)
-                setStatus(if (found.isEmpty()) "未找到起点书籍" else "找到 ${found.size} 本备份书籍 · 请选择")
+                setStatus(if (found.isEmpty()) "未找到起点书籍 · 请查看日志提示" else "找到 ${found.size} 本备份书籍 · 请选择")
                 appendLog("扫描完成，共 ${found.size} 本起点备份书籍。")
             } catch (error: Exception) {
                 setBusy(false)
@@ -169,7 +183,8 @@ class MainActivity : AppCompatActivity() {
     private fun showBookInfo(position: Int) {
         val info = books.getOrNull(position)
         tvBookInfo.text = info?.let {
-            "作者：${it.author}\n书籍 ID：${it.bookId}\n用户目录：${it.qdUserDir}\n结构检查：${it.statusNote}"
+            val layoutName = if (it.layout == "backup") "桌面备份布局" else "原始缓存布局"
+            "作者：${it.author}\n书籍 ID：${it.bookId}\n用户目录：${it.qdUserDir}\n目录类型：$layoutName\n结构检查：${it.statusNote}"
         } ?: "尚未选择书籍"
     }
 

@@ -22,9 +22,17 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m reader_cache_toolkit gui
 ```
 
-选择渠道、缓存目录、真实书籍 ID、尚不存在的输出目录和输出格式，再执行转换。微信读书旧备份需要原账号 VID 与 WRReader 数据库；通过本工具生成的备份会记录必要的本地元数据。
+**选择目录导出（推荐，主页面）**：手动选择任意缓存目录 → 点“扫描书籍”→ 自动识别书中的起点书籍并检查结构 → 选中书籍、勾选格式、选择输出新目录 → 开始导出。支持三种目录形态：
 
-模拟器备份页先刷新设备，明确选择设备，再扫描书籍和备份。多设备、多账号遇到歧义会报错，不自动选取。设备需事先具有目标缓存目录的读取权限，程序不会执行 `adb root` 或启停模拟器。
+1. 桌面工具备份出的标准备份目录（含 `qidian_book_metadata_*.json`）；
+2. 从模拟器手动复制的原始 `QDReader/book` 缓存目录（`{用户目录}/{书籍ID}.qd` 索引 + 同名章节缓存子目录）；
+3. 包含一个或多个上述目录的上级目录（一次扫描可发现多本书）。
+
+解密必需的 `QDConfig` 设备标识数据库通常能在所选目录树中自动找到；找不到时请在“QDConfig 数据库”栏手动指定该文件（桌面备份在 `database/databases/` 内）。原始布局没有书名元数据时，书名与作者会从缓存的版权页自动补齐。
+
+**本地缓存转换（高级）**：手动选择渠道、缓存目录、真实书籍 ID、尚不存在的输出目录和输出格式后执行转换，行为与命令行一致。微信读书旧备份需要原账号 VID 与 WRReader 数据库。
+
+模拟器备份仍可通过命令行（`devices` / `scan` / `backup`）使用：刷新设备，明确选择设备，再扫描书籍和备份。多设备、多账号遇到歧义会报错，不自动选取。设备需事先具有目标缓存目录的读取权限，程序不会执行 `adb root` 或启停模拟器。
 
 ## 命令行
 
@@ -63,6 +71,14 @@ python -m venv .venv
 新增渠道需要实现 `ChannelAdapter.load` 并在工厂注册；新增格式需要实现 `Exporter.export`。不要在界面中加入解析算法或 ADB shell 拼接。
 
 详细依赖关系和流程见 [架构说明](docs/architecture.md)。
+
+## 手机端 App（Android）
+
+`android/` 目录是同一工具的 Kotlin 原生 Android 工程，供在真机上直接导出起点缓存，全程使用系统文件选择器（SAF）授权，不申请敏感权限、不读取其他应用数据。App 的目录扫描规则与桌面“选择目录导出”页一致：支持桌面备份目录、从模拟器复制的原始 `QDReader/book` 目录，以及包含多本书的上级目录；`QDConfig` 可位于所选目录树任意位置。
+
+使用链路：在电脑上准备一个包含起点缓存的目录（桌面备份目录，或从模拟器复制的 `QDReader/book` 目录 + `QDConfig` 文件）→ 将整个目录传到手机任意位置 → App 中点“选择备份目录”并选中该文件夹 → 扫描书籍 → 勾选 TXT / Markdown / EPUB / XHTML → 选择输出位置导出。缺失章节与转换报告（`conversion_report.json`、`index.csv`、`chapters_meta`）与桌面版产物结构一致。
+
+云端打包：仓库已包含 `.github/workflows/build-android.yml`，推送或手动触发即会在 GitHub Actions 构建 Debug APK；在对应 Run 页面的 Artifacts 下载 `ReaderCacheToolkit-mobile-debug.apk` 安装到手机（需允许安装未知来源应用）。推送 `v*` 标签时 APK 同时发布到 Release。本地构建可用 Android Studio 打开 `android/` 目录，或执行 `gradle -p android assembleDebug`。
 
 ## 开发与打包
 

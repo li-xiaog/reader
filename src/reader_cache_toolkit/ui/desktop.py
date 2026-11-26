@@ -23,7 +23,7 @@ from reader_cache_toolkit.models import (
 )
 
 if TYPE_CHECKING:
-    from reader_cache_toolkit.infrastructure.backup import CachedBook, DeviceInfo
+    from reader_cache_toolkit.infrastructure.local_source import LocalBook
     from reader_cache_toolkit.service import ConversionService
 
 
@@ -67,10 +67,7 @@ class DesktopWindow:
         self._output_dir: Path | None = None
         self._result_files: dict[str, Path] = {}
         self._active_task = "convert"
-        self._devices: dict[str, DeviceInfo] = {}
-        self._books: dict[str, CachedBook] = {}
-        self._scan_serial: str | None = None
-        self._backup_output_dir: Path | None = None
+        self._local_books: dict[str, LocalBook] = {}
         self.channel = tk.StringVar(value="番茄小说")
         self.source = tk.StringVar()
         self.book_id = tk.StringVar()
@@ -83,12 +80,11 @@ class DesktopWindow:
         }
         self.status = tk.StringVar(value="就绪 · 请选择本地缓存目录")
         self.feedback = tk.StringVar()
-        self.adb_path = tk.StringVar()
-        self.device = tk.StringVar()
-        self.backup_channel = tk.StringVar(value="番茄小说")
-        self.backup_output = tk.StringVar()
-        self.backup_status = tk.StringVar(value="请刷新设备并选择目标模拟器")
-        self.backup_feedback = tk.StringVar()
+        self.local_source = tk.StringVar()
+        self.local_qdconfig = tk.StringVar()
+        self.local_output = tk.StringVar()
+        self.local_status = tk.StringVar(value="请选择缓存目录并扫描书籍")
+        self.local_feedback = tk.StringVar()
 
         # 2. 配置原生窗口、菜单栏、可读字号和统一间距。
         self._configure_window()
@@ -98,7 +94,6 @@ class DesktopWindow:
 
         # 3. 同步渠道专属输入的可用性，所有 Tk 调用保持在主线程。
         self._update_channel()
-        self.adb_path.trace_add("write", self._adb_configuration_changed)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
         # 4. 定时消费工作线程事件，关闭时取消定时器。
@@ -201,12 +196,12 @@ class DesktopWindow:
 
         self.tabs = ttk.Notebook(shell)
         self.tabs.grid(row=1, column=0, sticky="nsew")
+        self.local_tab = ttk.Frame(self.tabs, padding=(18, 18))
         self.convert_tab = ttk.Frame(self.tabs, padding=(18, 16))
-        self.backup_tab = ttk.Frame(self.tabs, padding=(18, 18))
+        self.tabs.add(self.local_tab, text="选择目录导出")
         self.tabs.add(self.convert_tab, text="本地缓存转换")
-        self.tabs.add(self.backup_tab, text="MuMu 模拟器备份")
+        self._build_local_tab()
         self._build_conversion_tab()
-        self._build_backup_tab()
 
         ttk.Label(
             shell,
@@ -324,95 +319,107 @@ class DesktopWindow:
         self.result_tree.configure(yscrollcommand=scrollbar.set, xscrollcommand=horizontal.set)
         self.result_tree.bind("<Double-1>", self._open_selected_result)
 
-    def _build_backup_tab(self) -> None:
-        """建立真实设备选择、书籍扫描和独立目录备份流程。参数：无。返回：无。"""
-        # 1. 提供 ADB 路径和显式设备选择，刷新不会自动选择其他设备。
-        self.backup_tab.columnconfigure(0, weight=1)
-        self.backup_tab.rowconfigure(2, weight=2)
-        self.backup_tab.rowconfigure(6, weight=1)
-        form = ttk.Frame(self.backup_tab)
+    def _build_local_tab(self) -> None:
+        """构建“选择目录导出”页：智能扫描、书籍选择、格式与输出。参数：无。返回：无。"""
+        # 1. 三个路径输入：缓存目录、可选 QDConfig 与输出新目录。
+        self.local_tab.columnconfigure(0, weight=1)
+        self.local_tab.rowconfigure(2, weight=2)
+        self.local_tab.rowconfigure(6, weight=1)
+        form = ttk.Frame(self.local_tab)
         form.grid(row=0, column=0, sticky="ew")
         form.columnconfigure(1, weight=1)
-        self._path_row(form, 0, "ADB 程序", self.adb_path, self._choose_adb, "选择程序…")
-        ttk.Label(form, text="留空时使用系统 ADB；请先在 MuMu 中开启 ADB。", style="Hint.TLabel").grid(
-            row=1, column=1, columnspan=4, sticky="w", pady=(0, 10)
-        )
-        ttk.Label(form, text="目标设备").grid(row=2, column=0, sticky="w", padx=(0, 12))
-        self.device_combo = ttk.Combobox(form, textvariable=self.device, values=(), state="readonly")
-        self.device_combo.grid(row=2, column=1, columnspan=3, sticky="ew")
-        self.device_combo.bind("<<ComboboxSelected>>", self._device_changed)
-        self.refresh_button = ttk.Button(form, text="刷新设备", command=self._refresh_devices)
-        self.refresh_button.grid(row=2, column=4, padx=(10, 0))
-        self._editable.extend(((self.device_combo, "readonly"), (self.refresh_button, "normal")))
+        self._path_row(form, 0, "缓存目录", self.local_source, self._choose_local_source, "选择目录…")
+        ttk.Label(
+            form,
+            text="支持桌面工具备份目录、从模拟器手动复制的 QDReader/book 缓存目录，"
+            "或包含多个备份的上级目录（一次扫描可发现多本书）。",
+            style="Hint.TLabel",
+        ).grid(row=1, column=1, columnspan=4, sticky="w", pady=(0, 8))
+        self._path_row(form, 2, "QDConfig 数据库", self.local_qdconfig, self._choose_local_qdconfig, "选择文件…")
+        ttk.Label(
+            form,
+            text="解密必需；扫描通常能在目录中自动找到，找不到时请手动指定（桌面备份在 database/databases 内）。",
+            style="Hint.TLabel",
+        ).grid(row=3, column=1, columnspan=4, sticky="w", pady=(0, 8))
+        self._path_row(form, 4, "输出新目录", self.local_output, self._choose_local_output, "选择父目录…")
 
-        # 2. 扫描结果仅列出服务返回的缓存书籍。
-        scan = ttk.Frame(self.backup_tab)
-        scan.grid(row=1, column=0, sticky="ew", pady=(12, 8))
-        ttk.Label(scan, text="书籍渠道").pack(side="left", padx=(0, 12))
-        channel = ttk.Combobox(
-            scan, textvariable=self.backup_channel, values=tuple(CHANNEL_NAMES), state="readonly", width=16
-        )
-        channel.pack(side="left")
-        channel.bind("<<ComboboxSelected>>", self._device_changed)
-        self._editable.append((channel, "readonly"))
-        self.scan_button = ttk.Button(scan, text="扫描缓存书籍", command=self._scan_books, state="disabled")
-        self.scan_button.pack(side="left", padx=(12, 0))
-        ttk.Label(scan, text="选择下方的一本书进行备份", style="Hint.TLabel").pack(side="right")
-        book_frame = ttk.Frame(self.backup_tab)
+        # 2. 扫描按钮与书籍列表：自动识别书籍，无需手动填写书籍 ID。
+        scan_actions = ttk.Frame(self.local_tab)
+        scan_actions.grid(row=1, column=0, sticky="ew", pady=(0, 8))
+        self.scan_local_button = ttk.Button(scan_actions, text="扫描书籍", command=self._start_local_scan)
+        self.scan_local_button.pack(side="left")
+        self._editable.append((self.scan_local_button, "normal"))
+        ttk.Label(
+            scan_actions,
+            text="自动识别备份目录与原始缓存中的起点书籍",
+            style="Hint.TLabel",
+        ).pack(side="left", padx=(12, 0))
+
+        book_frame = ttk.Frame(self.local_tab)
         book_frame.grid(row=2, column=0, sticky="nsew")
         book_frame.columnconfigure(0, weight=1)
         book_frame.rowconfigure(0, weight=1)
-        self.book_tree = ttk.Treeview(
-            book_frame, columns=("title", "id", "author"), show="headings", selectmode="browse", height=3
+        self.local_tree = ttk.Treeview(
+            book_frame,
+            columns=("title", "id", "author", "note"),
+            show="headings",
+            selectmode="browse",
+            height=4,
         )
         for column, title, width in (
-            ("title", "缓存书籍", 460),
-            ("id", "书籍 ID", 220),
-            ("author", "作者", 180),
+            ("title", "书籍", 300),
+            ("id", "书籍 ID", 140),
+            ("author", "作者", 110),
+            ("note", "结构检查", 320),
         ):
-            self.book_tree.heading(column, text=title)
-            self.book_tree.column(column, width=width, minwidth=100)
-        self.book_tree.grid(row=0, column=0, sticky="nsew")
-        scroll = ttk.Scrollbar(book_frame, orient="vertical", command=self.book_tree.yview)
+            self.local_tree.heading(column, text=title)
+            self.local_tree.column(column, width=width, minwidth=80)
+        self.local_tree.grid(row=0, column=0, sticky="nsew")
+        scroll = ttk.Scrollbar(book_frame, orient="vertical", command=self.local_tree.yview)
         scroll.grid(row=0, column=1, sticky="ns")
-        self.book_tree.configure(yscrollcommand=scroll.set)
-        self.book_tree.bind("<<TreeviewSelect>>", self._book_selected)
-        self.book_tree.bind("<Button-1>", self._guard_book_interaction)
-        self.book_tree.bind("<Key>", self._guard_book_interaction)
+        self.local_tree.configure(yscrollcommand=scroll.set)
+        self.local_tree.bind("<<TreeviewSelect>>", self._on_local_book_selected)
+        self.local_tree.bind("<Button-1>", self._guard_local_interaction)
+        self.local_tree.bind("<Key>", self._guard_local_interaction)
 
-        # 3. 写入新目录，成功后允许把本次备份送往转换页。
-        output_form = ttk.Frame(self.backup_tab)
-        output_form.grid(row=3, column=0, sticky="ew", pady=(12, 0))
-        output_form.columnconfigure(1, weight=1)
-        self._path_row(
-            output_form, 0, "备份新目录", self.backup_output, self._choose_backup_output, "选择父目录…"
-        )
-        actions = ttk.Frame(self.backup_tab)
-        actions.grid(row=4, column=0, sticky="ew", pady=(0, 6))
-        self.backup_button = ttk.Button(
+        # 3. 导出格式与完整性要求与本地转换页共享同一偏好。
+        options = ttk.Frame(self.local_tab)
+        options.grid(row=3, column=0, sticky="ew", pady=(8, 4))
+        ttk.Label(options, text="导出格式", style="Section.TLabel").pack(side="left", padx=(0, 18))
+        for export_format, variable in self.formats.items():
+            label = "Markdown" if export_format is ExportFormat.MARKDOWN else export_format.value.upper()
+            checkbox = ttk.Checkbutton(options, text=label, variable=variable)
+            checkbox.pack(side="left", padx=(0, 18))
+            self._editable.append((checkbox, "normal"))
+        complete = ttk.Checkbutton(options, text="仅在章节完整时导出", variable=self.require_complete)
+        complete.pack(side="right")
+        self._editable.append((complete, "normal"))
+
+        # 4. 导出操作与真实状态。
+        actions = ttk.Frame(self.local_tab)
+        actions.grid(row=4, column=0, sticky="ew", pady=(6, 6))
+        self.local_export_button = ttk.Button(
             actions,
-            text="备份选中书籍",
+            text="开始导出",
             style="Primary.TButton",
-            command=self._start_backup,
+            command=self._start_local_export,
             state="disabled",
         )
-        self.backup_button.pack(side="left")
-        self.open_backup_button = ttk.Button(
-            actions, text="打开备份目录", command=self._open_backup_output, state="disabled"
+        self.local_export_button.pack(side="left")
+        self.local_open_button = ttk.Button(
+            actions, text="打开输出目录", command=self._open_output, state="disabled"
         )
-        self.open_backup_button.pack(side="left", padx=10)
-        ttk.Label(actions, textvariable=self.backup_status, style="Status.TLabel").pack(
-            side="left", padx=(8, 0)
+        self.local_open_button.pack(side="left", padx=10)
+        ttk.Label(actions, textvariable=self.local_status, style="Status.TLabel").pack(side="left", padx=(8, 0))
+        self.local_feedback_label = ttk.Label(
+            self.local_tab, textvariable=self.local_feedback, style="Error.TLabel", wraplength=900
         )
-        self.backup_feedback_label = ttk.Label(
-            self.backup_tab, textvariable=self.backup_feedback, style="Error.TLabel", wraplength=900
-        )
-        self.backup_feedback_label.grid(row=5, column=0, sticky="ew", pady=(0, 6))
+        self.local_feedback_label.grid(row=5, column=0, sticky="ew", pady=(0, 6))
 
-        # 4. 在当前页呈现真实扫描及复制进度。
-        self.backup_log = ScrolledText(
-            self.backup_tab,
-            height=3,
+        # 5. 扫描与导出的真实进度日志。
+        self.local_log = ScrolledText(
+            self.local_tab,
+            height=4,
             wrap="word",
             state="disabled",
             font=("Microsoft YaHei UI", 11),
@@ -422,7 +429,7 @@ class DesktopWindow:
             padx=12,
             pady=10,
         )
-        self.backup_log.grid(row=6, column=0, sticky="nsew")
+        self.local_log.grid(row=6, column=0, sticky="nsew")
 
     def _path_row(
         self,
@@ -467,207 +474,168 @@ class DesktopWindow:
         if path:
             self.reader_db.set(path)
 
-    def _choose_adb(self) -> None:
-        """选择用户本地 ADB 可执行文件。参数：无。返回：无。"""
-        path = filedialog.askopenfilename(
-            parent=self.root, title="选择 adb.exe", filetypes=(("可执行程序", "*.exe"), ("所有文件", "*"))
-        )
-        if path:
-            self.adb_path.set(path)
-
-    def _adb_configuration_changed(self, *arguments: str) -> None:
-        """ADB 路径变更时废弃旧设备和缓存列表。参数：arguments Tk 变量跟踪事件参数。返回：无。"""
-        self._devices.clear()
-        self.device.set("")
-        self.device_combo.configure(values=())
-        self._device_changed()
-        self.backup_status.set("ADB 配置已变化 · 请刷新设备")
-
-    def _choose_backup_output(self) -> None:
-        """选择备份父目录并填写新的备份目录。参数：无。返回：无。"""
+    def _choose_local_source(self) -> None:
+        """通过目录选择器填写真实缓存目录。参数：无。返回：无。"""
         path = filedialog.askdirectory(
-            parent=self.root, title="选择备份父目录，将写入新的子目录", mustexist=True
+            parent=self.root, title="选择缓存目录（备份目录或 QDReader/book）", mustexist=True
         )
         if path:
-            channel = CHANNEL_NAMES[self.backup_channel.get()]
-            self.backup_output.set(str(Path(path) / f"{channel.value}_backup_{datetime.now():%Y%m%d_%H%M%S}"))
+            self.local_source.set(path)
 
-    def _device_changed(self, event: tk.Event | None = None) -> None:
-        """切换设备或渠道后清除过期扫描结果。参数：event 可选 Tk 选择事件。返回：无。"""
-        self._books.clear()
-        self._scan_serial = None
-        for item in self.book_tree.get_children():
-            self.book_tree.delete(item)
-        self._update_device_actions()
+    def _choose_local_qdconfig(self) -> None:
+        """选择 QDConfig 设备标识数据库文件。参数：无。返回：无。"""
+        path = filedialog.askopenfilename(
+            parent=self.root, title="选择 QDConfig 数据库（解密必需）", filetypes=(("所有文件", "*"),)
+        )
+        if path:
+            self.local_qdconfig.set(path)
 
-    def _book_selected(self, event: tk.Event | None = None) -> None:
-        """根据真实书籍选择状态更新备份按钮。参数：event 可选 Tk 选择事件。返回：无。"""
-        self._update_device_actions()
+    def _choose_local_output(self) -> None:
+        """选择输出父目录并建议新的子目录路径。参数：无。返回：无。"""
+        path = filedialog.askdirectory(
+            parent=self.root, title="选择输出父目录，将写入新的子目录", mustexist=True
+        )
+        if path:
+            name = f"qidian_export_{datetime.now():%Y%m%d_%H%M%S}"
+            self.local_output.set(str(Path(path) / name))
 
-    def _guard_book_interaction(self, event: tk.Event) -> str | None:
+    def _guard_local_interaction(self, event: tk.Event) -> str | None:
         """执行任务时阻止修改书籍选择。参数：event 鼠标或键盘事件。返回：忙碌时返回 break，否则返回 None。"""
         return "break" if self._busy else None
 
-    def _update_device_actions(self) -> None:
-        """根据设备、选择和任务状态启用操作。参数：无。返回：无。"""
-        device = self._devices.get(self.device.get())
-        device_ready = device is not None and device.state == "device"
-        self.scan_button.configure(state="normal" if device_ready and not self._busy else "disabled")
-        selected = self.book_tree.selection()
-        book_ready = bool(selected and selected[0] in self._books)
-        self.backup_button.configure(
-            state="normal" if device_ready and book_ready and not self._busy else "disabled"
+    def _update_local_actions(self) -> None:
+        """根据书籍选择、结构完整性与任务状态启用导出操作。参数：无。返回：无。"""
+        selected = self.local_tree.selection()
+        book = self._local_books.get(selected[0]) if selected else None
+        self.local_export_button.configure(
+            state="normal" if book is not None and book.ready and not self._busy else "disabled"
         )
 
-    def _selected_serial(self) -> str:
-        """取得用户显式选择的在线设备。参数：无。返回：设备序列号；无有效选择时抛出 ValueError。"""
-        device = self._devices.get(self.device.get())
-        if device is None:
-            raise ValueError("请刷新设备并明确选择目标模拟器。")
-        if device.state != "device":
-            raise ValueError(f"所选设备当前状态为 {device.state}，无法读取缓存。")
-        return device.serial
+    def _on_local_book_selected(self, event: tk.Event | None = None) -> None:
+        """书籍选中后预填扫描到的 QDConfig 并刷新按钮状态。参数：event 可选 Tk 选择事件。返回：无。"""
+        selected = self.local_tree.selection()
+        book = self._local_books.get(selected[0]) if selected else None
+        if book is not None and book.qdconfig_path is not None:
+            self.local_qdconfig.set(str(book.qdconfig_path))
+        self._update_local_actions()
 
-    def _begin_device_task(self, kind: str, status: str) -> Path | None:
-        """验证 ADB 配置并锁定所有任务入口。参数：kind 任务种类、status 展示状态。返回：可选 ADB 路径。"""
-        adb_text = self.adb_path.get().strip()
-        adb_path = Path(adb_text).expanduser() if adb_text else None
-        if adb_path is not None and not adb_path.is_file():
-            raise ValueError(f"ADB 程序文件不存在：{adb_path}")
-        self._active_task = kind
-        self.backup_feedback.set("")
-        self.backup_status.set(status)
+    def _start_local_scan(self) -> None:
+        """异步扫描用户手动选择的缓存目录。参数：无。返回：无。"""
+        # 1. 拦截重复提交与非法目录。
+        if self._busy:
+            return
+        text = self.local_source.get().strip()
+        if not text:
+            self.local_feedback.set("请先选择缓存目录。")
+            return
+        root = Path(text).expanduser()
+        if not root.is_dir():
+            self.local_feedback.set(f"缓存目录不存在或不是文件夹：{root}")
+            return
+        self._active_task = "local-scan"
+        self.local_feedback.set("")
+        self.local_status.set("正在扫描缓存目录…")
+        self.local_log.configure(state="normal")
+        self.local_log.delete("1.0", "end")
+        self.local_log.configure(state="disabled")
         self._set_busy(True)
-        return adb_path
+        # 2. 后台线程执行扫描，结果通过队列回到主线程。
+        self._executor.submit(self._local_scan_worker, root)
 
-    def _refresh_devices(self) -> None:
-        """异步读取实际 ADB 设备列表。参数：无。返回：无。"""
-        if self._busy:
-            return
+    def _local_scan_worker(self, root: Path) -> None:
+        """在工作线程执行智能目录扫描。参数：root 缓存目录。返回：无。"""
         try:
-            adb_path = self._begin_device_task("devices", "正在读取设备列表…")
-        except (ValueError, OSError) as error:
-            self.backup_feedback.set(str(error))
-            return
-        self._executor.submit(self._device_worker, "devices", adb_path)
+            from reader_cache_toolkit.infrastructure.local_source import scan_local_source
 
-    def _scan_books(self) -> None:
-        """异步扫描所选设备及渠道的真实缓存。参数：无。返回：无。"""
-        if self._busy:
-            return
-        try:
-            serial = self._selected_serial()
-            channel = CHANNEL_NAMES[self.backup_channel.get()]
-            adb_path = self._begin_device_task("scan", "正在扫描缓存书籍…")
-        except (ValueError, OSError) as error:
-            self.backup_feedback.set(str(error))
-            return
-        self._device_changed()
-        self._scan_serial = serial
-        self._executor.submit(self._device_worker, "scan", adb_path, serial, channel)
-
-    def _start_backup(self) -> None:
-        """验证书籍和新目录后提交备份任务。参数：无。返回：无。"""
-        # 1. 确认所选书籍来自当前设备的扫描结果。
-        if self._busy:
-            return
-        try:
-            serial = self._selected_serial()
-            selected = self.book_tree.selection()
-            if not selected or selected[0] not in self._books:
-                raise ValueError("请先扫描并选择一本缓存书籍。")
-            if serial != self._scan_serial:
-                raise ValueError("目标设备已变化，请重新扫描书籍。")
-            book = self._books[selected[0]]
-            # 2. 新目录避免覆盖之前的原始缓存备份。
-            if not self.backup_output.get().strip():
-                raise ValueError("请填写备份新目录或选择备份父目录。")
-            output = Path(self.backup_output.get().strip()).expanduser()
-            if output.exists():
-                raise ValueError("备份目录已经存在，请填写新的目录名称。")
-            adb_path = self._begin_device_task("backup", "正在备份缓存…")
-        except (ValueError, OSError) as error:
-            self.backup_feedback.set(str(error))
-            return
-        # 3. 清除上次备份的成功状态。
-        self._backup_output_dir = None
-        self.open_backup_button.configure(state="disabled")
-        # 4. 通过统一工作线程执行真实备份。
-        self._executor.submit(self._device_worker, "backup", adb_path, serial, book=book, output=output)
-
-    def _device_worker(
-        self,
-        kind: str,
-        adb_path: Path | None,
-        serial: str = "",
-        channel: Channel | None = None,
-        book: CachedBook | None = None,
-        output: Path | None = None,
-    ) -> None:
-        """调用设备应用服务并把结果传回主线程。参数：kind 操作、adb_path 程序路径、serial 设备、channel 渠道、book 书籍、output 新目录。返回：无。"""
-        try:
-            from reader_cache_toolkit.infrastructure.backup import AdbBackupService
-
-            service = AdbBackupService(adb_path=adb_path)
-            if kind == "devices":
-                self._events.put(("devices", service.devices()))
-            elif kind == "scan" and channel is not None:
-                self._events.put(("books", service.scan(channel, serial, self._publish_progress)))
-            elif kind == "backup" and book is not None and output is not None:
-                path = service.backup(book, serial, output, self._publish_progress)
-                self._events.put(("backup", (book, path)))
-            else:
-                raise ValueError("设备任务参数不完整。")
+            books = scan_local_source(root, self._publish_progress)
         except Exception as error:
             self._events.put(("error", f"{type(error).__name__}: {error}"))
+        else:
+            self._events.put(("local-books", (root, books)))
 
-    def _show_devices(self, devices: tuple[DeviceInfo, ...]) -> None:
-        """呈现真实设备且保留有效的显式选择。参数：devices 设备列表。返回：无。"""
-        previous = self.device.get()
-        self._devices = {f"{item.serial} · {item.state} · {item.description}": item for item in devices}
-        self.device_combo.configure(values=tuple(self._devices))
-        self.device.set(previous if previous in self._devices else "")
-        self._device_changed()
-        self._set_busy(False)
-        self.backup_status.set(
-            f"找到 {len(devices)} 台设备 · 请选择目标设备" if devices else "未找到 ADB 设备"
-        )
-        self._append_log(f"设备读取完成，共 {len(devices)} 台。")
-
-    def _show_books(self, books: tuple[CachedBook, ...]) -> None:
-        """呈现扫描返回的实际缓存书籍。参数：books 真实书籍列表。返回：无。"""
+    def _show_local_books(self, root: Path, books: tuple) -> None:
+        """呈现扫描返回的实际书籍列表。参数：root 扫描目录、books 书籍记录。返回：无。"""
+        self._local_books.clear()
+        for item in self.local_tree.get_children():
+            self.local_tree.delete(item)
         for book in books:
-            item = self.book_tree.insert("", "end", values=(book.title, book.book_id, book.author))
-            self._books[item] = book
+            item = self.local_tree.insert(
+                "", "end", values=(book.title, book.book_id, book.author, book.note)
+            )
+            self._local_books[item] = book
         self._set_busy(False)
-        self.backup_status.set(f"找到 {len(books)} 本书 · 请选择书籍" if books else "此渠道未发现可备份缓存")
-        self._append_log(f"扫描完成，共 {len(books)} 本缓存书籍。")
+        self.local_status.set(
+            f"找到 {len(books)} 本书 · 请选择要导出的书籍" if books else "此目录中没有发现可导出的起点书籍"
+        )
+        self._append_log(f"扫描完成：{root}")
+        self._append_log(f"共发现 {len(books)} 本起点书籍，选中书籍即可开始导出。")
 
-    def _show_backup(self, book: CachedBook, path: Path) -> None:
-        """呈现真实备份并把来源信息传入转换表单。参数：book 已备份书籍、path 备份目录。返回：无。"""
-        self._set_busy(False)
-        self._backup_output_dir = path
-        self.open_backup_button.configure(state="normal")
-        self.channel.set(next(name for name, channel in CHANNEL_NAMES.items() if channel is book.channel))
-        self.source.set(str(path))
-        self.book_id.set(book.book_id)
-        self.account_id.set(book.account_id)
-        self.reader_db.set("")
-        self.output.set("")
-        self._update_channel()
-        self.backup_status.set("备份完成 · 已填入本地转换页")
-        self.status.set("缓存来源已填入 · 请选择输出新目录")
-        self._append_log(f"缓存备份完成：{path}")
+    def _start_local_export(self) -> None:
+        """校验扫描结果与输出目录后提交导出任务。参数：无。返回：无。"""
+        # 1. 确认所选书籍来自当前扫描结果且结构完整。
+        if self._busy:
+            return
+        try:
+            selected = self.local_tree.selection()
+            book = self._local_books.get(selected[0]) if selected else None
+            if book is None:
+                raise ValueError("请先扫描并选择一本书籍。")
+            if not book.ready:
+                raise ValueError(f"备份结构不完整：{book.note}")
+            if not self.local_output.get().strip():
+                raise ValueError("请填写输出新目录，或选择一个输出父目录。")
+            output = Path(self.local_output.get().strip()).expanduser()
+            if output.exists():
+                raise ValueError("输出目录已经存在，请填写新的目录名称，避免覆盖已有文件。")
+            selected_formats = tuple(item for item, variable in self.formats.items() if variable.get())
+            if not selected_formats:
+                raise ValueError("请至少选择一种导出格式。")
+            override_text = self.local_qdconfig.get().strip()
+            override = Path(override_text).expanduser() if override_text else None
+            if override is not None and not override.is_file():
+                raise ValueError(f"QDConfig 数据库不存在或不是文件：{override}")
+        except (ValueError, OSError) as error:
+            self.local_feedback.set(str(error))
+            return
+        # 2. 清除上次任务结果，锁定输入并显示任务阶段。
+        self._output_dir = None
+        self.local_open_button.configure(state="disabled")
+        self.result_tree.delete(*self.result_tree.get_children())
+        self.local_log.configure(state="normal")
+        self.local_log.delete("1.0", "end")
+        self.local_log.configure(state="disabled")
+        self._active_task = "local-export"
+        self.local_feedback.set("")
+        self.local_status.set("正在导出 · 请查看执行日志")
+        self._append_log(f"开始导出：《{book.title}》书籍 {book.book_id}（{book.layout} 布局）")
+        self._append_log(f"输出目录：{output}")
+        self._set_busy(True)
+        # 3. 后台线程完成解码与统一导出服务调用。
+        self._executor.submit(
+            self._local_export_worker, book, override, output, selected_formats, self.require_complete.get()
+        )
 
-    def _open_backup_output(self) -> None:
-        """打开已经完成的本地备份目录。参数：无。返回：无。"""
-        if self._backup_output_dir is not None:
-            try:
-                if not self._backup_output_dir.is_dir():
-                    raise FileNotFoundError(f"备份目录已经不存在：{self._backup_output_dir}")
-                os.startfile(str(self._backup_output_dir))
-            except OSError as error:
-                self.backup_feedback.set(f"无法打开：{error}")
+    def _local_export_worker(
+        self,
+        book: LocalBook,
+        override: Path | None,
+        output: Path,
+        formats: tuple[ExportFormat, ...],
+        require_complete: bool,
+    ) -> None:
+        """在工作线程解码书籍并调用统一导出服务。参数：book 扫描书籍、override QDConfig 覆盖、output 输出新目录、formats 格式、require_complete 完整性要求。返回：无。"""
+        try:
+            from reader_cache_toolkit.infrastructure.local_source import load_local_book, resolve_qdconfig
+
+            qdconfig = resolve_qdconfig(book, override)
+            document = load_local_book(book, qdconfig, self._publish_progress)
+            result = self.service.export_book(
+                document, output, formats, require_complete, self._publish_progress
+            )
+        except Exception as error:
+            self._events.put(("error", f"{type(error).__name__}: {error}"))
+        else:
+            self._events.put(("result", result))
 
     def _update_channel(self, event: tk.Event | None = None) -> None:
         """按渠道显示微信读书专属字段。参数：event 可选 Tk 选择事件。返回：无。"""
@@ -679,7 +647,7 @@ class DesktopWindow:
     def _resize_feedback(self, event: tk.Event) -> None:
         """根据窗口宽度换行错误说明。参数：event 容器尺寸事件。返回：无。"""
         self.feedback_label.configure(wraplength=max(300, event.width - 40))
-        self.backup_feedback_label.configure(wraplength=max(300, event.width - 40))
+        self.local_feedback_label.configure(wraplength=max(300, event.width - 40))
 
     def _make_request(self) -> ConversionRequest:
         """验证必填项并构造统一请求。参数：无。返回：ConversionRequest；输入不完整时抛出 ValueError。"""
@@ -764,8 +732,8 @@ class DesktopWindow:
         for widget, normal_state in self._editable:
             widget.configure(state="disabled" if busy else normal_state)
         self.convert_button.configure(state="disabled" if busy else "normal")
-        self.book_tree.state(("disabled",) if busy else ("!disabled",))
-        self._update_device_actions()
+        self.local_tree.state(("disabled",) if busy else ("!disabled",))
+        self._update_local_actions()
 
     def _convert_worker(self, request: ConversionRequest) -> None:
         """在工作线程执行转换并发送结果。参数：request 不可变转换请求。返回：无。"""
@@ -796,12 +764,9 @@ class DesktopWindow:
                 self._append_log(str(payload))
             elif kind == "result" and isinstance(payload, ConversionResult):
                 self._show_result(payload)
-            elif kind == "devices":
-                self._show_devices(payload)
-            elif kind == "books":
-                self._show_books(payload)
-            elif kind == "backup":
-                self._show_backup(*payload)
+            elif kind == "local-books":
+                root, books = payload
+                self._show_local_books(root, books)
             elif kind == "error":
                 self._show_error(str(payload))
         # 4. 窗口存续时安排下一轮；后台线程从不调用 after。
@@ -810,7 +775,7 @@ class DesktopWindow:
 
     def _append_log(self, message: str) -> None:
         """追加可复制的时间戳日志。参数：message 真实事件文本。返回：无。"""
-        target = self.log if self._active_task == "convert" else self.backup_log
+        target = self.log if self._active_task == "convert" else self.local_log
         target.configure(state="normal")
         target.insert("end", f"[{datetime.now():%H:%M:%S}] {message}\n")
         target.see("end")
@@ -821,7 +786,11 @@ class DesktopWindow:
         self._set_busy(False)
         self._output_dir = result.output_dir
         self.open_output_button.configure(state="normal")
-        self.status.set(f"转换完成 · {result.chapter_count} 个目录项")
+        self.local_open_button.configure(state="normal")
+        if self._active_task == "convert":
+            self.status.set(f"转换完成 · {result.chapter_count} 个目录项")
+        else:
+            self.local_status.set(f"导出完成 · {result.chapter_count} 个目录项")
         files = tuple(dict.fromkeys((*result.files, result.report_path)))
         for path in files:
             kind = "转换报告" if path == result.report_path else path.suffix.lstrip(".").upper()
@@ -829,7 +798,8 @@ class DesktopWindow:
             self._result_files[item] = path
         self._append_log(f"转换完成，实际导出 {result.chapter_count} 个目录项。")
         self._append_log(f"转换报告：{result.report_path}")
-        self.activity.select(1)
+        if self._active_task == "convert":
+            self.activity.select(1)
 
     def _show_error(self, message: str) -> None:
         """明确呈现任务失败原因。参数：message 实际异常文本。返回：无。"""
@@ -839,8 +809,8 @@ class DesktopWindow:
             self.feedback.set(message)
             self.activity.select(0)
         else:
-            self.backup_status.set("操作失败 · 请查看错误详情")
-            self.backup_feedback.set(message)
+            self.local_status.set("操作失败 · 请查看错误详情")
+            self.local_feedback.set(message)
         self._append_log(f"错误：{message}")
 
     def _open_output(self) -> None:

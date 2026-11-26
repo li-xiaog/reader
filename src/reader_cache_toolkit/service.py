@@ -10,7 +10,13 @@ from pathlib import Path
 
 from reader_cache_toolkit.errors import ReaderCacheError
 from reader_cache_toolkit.factory import create_adapter, create_exporter
-from reader_cache_toolkit.models import BookDocument, ConversionRequest, ConversionResult, ProgressCallback
+from reader_cache_toolkit.models import (
+    BookDocument,
+    ConversionRequest,
+    ConversionResult,
+    ExportFormat,
+    ProgressCallback,
+)
 
 
 def quiet_progress(message: str) -> None:
@@ -120,13 +126,48 @@ class ConversionService:
         book = create_adapter(request.channel).load(request, progress)
         for diagnostic in book.diagnostics:
             progress(f"提示：{diagnostic}")
-        validate_book(book, request.require_complete)
+        return self._publish(book, destination, request.formats, request.require_complete, progress)
+
+    def export_book(
+        self,
+        book: BookDocument,
+        output_dir: Path,
+        formats: tuple[ExportFormat, ...],
+        require_complete: bool = False,
+        progress: ProgressCallback = quiet_progress,
+    ) -> ConversionResult:
+        """把已解析书籍导出为真实文件，供手动目录导出等入口复用。
+
+        参数：book为解析结果；output_dir为尚不存在的新目录；formats为格式列表；
+        require_complete为完整性要求；progress为阶段进度回调。
+        返回：转换结果；输出冲突或校验失败时抛出真实异常。
+        """
+        # 1. 输出必须指向尚未创建的独立目录，格式必须显式且不重复。
+        destination = Path(output_dir).expanduser().resolve()
+        if destination.exists():
+            raise FileExistsError(f"输出目录已存在，请选择新目录：{destination}")
+        if not formats:
+            raise ReaderCacheError("请至少选择一个导出格式")
+        if len(set(formats)) != len(formats):
+            raise ReaderCacheError("输出格式重复")
+        return self._publish(book, destination, tuple(formats), require_complete, progress)
+
+    def _publish(
+        self,
+        book: BookDocument,
+        destination: Path,
+        formats: tuple[ExportFormat, ...],
+        require_complete: bool,
+        progress: ProgressCallback,
+    ) -> ConversionResult:
+        """统一校验、暂存导出、写入报告并原子发布。参数：book书籍、destination新目录、formats格式、require_complete完整性要求、progress进度回调。返回：转换结果。"""
+        validate_book(book, require_complete)
         destination.parent.mkdir(parents=True, exist_ok=True)
         stage = Path(tempfile.mkdtemp(prefix=".reader-export-", dir=destination.parent))
         try:
             # 3. 格式策略在专用暂存目录生成文件，写入核验报告后再发布。
             outputs = []
-            for format_name in request.formats:
+            for format_name in formats:
                 progress(f"正在生成并校验 {format_name.upper()}")
                 outputs.extend(create_exporter(format_name).export(book, stage))
             report = write_reports(book, stage, tuple(outputs))

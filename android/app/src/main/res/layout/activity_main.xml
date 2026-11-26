@@ -19,6 +19,7 @@
             android:textStyle="bold" />
 
         <TextView
+            android:id="@+id/tv_subtitle"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="4dp"
@@ -50,6 +51,14 @@
             android:textColor="#536775"
             android:textIsSelectable="true"
             android:textSize="12sp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="文件选择器中点左上角菜单 → 内部存储 → 找到传到手机的备份文件夹（如 Download）→ 进入文件夹后点底部“使用此文件夹”。支持桌面备份目录，也支持从模拟器复制的 QDReader/book 目录（需包含 QDConfig 文件）。"
+            android:textColor="#536775"
+            android:textSize="11sp" />
 
         <Spinner
             android:id="@+id/spinner_book"
