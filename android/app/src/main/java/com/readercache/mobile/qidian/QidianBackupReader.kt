@@ -107,6 +107,37 @@ object QidianBackupReader {
                 book.configFamily.addAll(family)
             }
         }
+        // 5. 原始布局没有元数据文件：尝试解密版权页，在列表中直接给出真实书名与作者。
+        val candidateCache = mutableMapOf<String, List<Pair<String, String>>>()
+        var identified = 0
+        for (book in pending) {
+            if (book.layout != "raw" || book.userDir.length == 0 || !book.userDir.all { it in '0'..'9' }) {
+                continue
+            }
+            if (book.configFamily.isEmpty()) {
+                continue
+            }
+            val cacheKey = book.configFamily.first().documentId
+            val candidates = candidateCache.getOrPut(cacheKey) {
+                try {
+                    readCandidatesFromFamily(context, book.configFamily)
+                } catch (error: Exception) {
+                    emptyList()
+                }
+            }
+            if (candidates.isEmpty()) {
+                continue
+            }
+            val (name, writer) = peekCopyright(context, treeUri, book, candidates)
+            if (name.isNotEmpty() || writer.isNotEmpty()) {
+                if (name.isNotEmpty()) book.title = name
+                if (writer.isNotEmpty()) book.author = writer
+                identified += 1
+            }
+        }
+        if (identified > 0) {
+            progress?.invoke("已从版权页识别 $identified 本书的书名与作者")
+        }
         val books = pending
             .map { it.toBackupInfo() }
             .sortedBy { it.title }
@@ -404,14 +435,39 @@ object QidianBackupReader {
         }
     }
 
+    /** 扫描期解密版权页（-10000 缓存）提前给出书名与作者；失败静默返回空串。 */
+    private fun peekCopyright(
+        context: Context,
+        treeUri: Uri,
+        book: PendingBook,
+        candidates: List<Pair<String, String>>,
+    ): Pair<String, String> {
+        val cacheEntry = book.cacheEntry ?: return "" to ""
+        val copyright = SafTree.children(context, treeUri, cacheEntry.documentId)["-10000.qd"]
+            ?.takeIf { !it.isDirectory } ?: return "" to ""
+        return try {
+            val raw = SafTree.readBytes(context, copyright.documentUri)
+            val decoded = decodeCachedChapter(raw, "-10000", "版权页", book.userDir, candidates)
+            val metadata = decoded.copyrightMetadata ?: return "" to ""
+            metadata.optString("BookName", "").trim() to metadata.optString("Author", "").trim()
+        } catch (error: Exception) {
+            "" to ""
+        }
+    }
+
     /** 复制 QDConfig 数据库家族到私有缓存目录并读取真实设备标识候选。 */
     private fun readDeviceCandidates(context: Context, info: BackupInfo): List<Pair<String, String>> {
         if (info.configFamily.isEmpty()) {
             throw ReaderCacheError(QD_CONFIG_HINT)
         }
+        return readCandidatesFromFamily(context, info.configFamily)
+    }
+
+    /** 复制 QDConfig 数据库家族到私有缓存目录并读取真实设备标识候选。 */
+    private fun readCandidatesFromFamily(context: Context, family: List<SafEntry>): List<Pair<String, String>> {
         val tempDir = File(context.cacheDir, "qd-config-${System.nanoTime()}")
         try {
-            val main = copySqliteFamily(context, info.configFamily, "QDConfig", tempDir)
+            val main = copySqliteFamily(context, family, "QDConfig", tempDir)
                 ?: throw ReaderCacheError("缺少 QDConfig 设备标识数据库")
             openSnapshot(context, main).use { connection ->
                 val rows = mutableListOf<Pair<String, String>>()

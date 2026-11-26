@@ -135,6 +135,29 @@ private fun extraFieldEmpty(document: JSONObject, key: String): Boolean {
     }
 }
 
+/** 提取作者附言的可读文本：字符串直接用，对象取 Content，数组逐项取文本；其余类型跳过。 */
+private fun authorCommentsText(document: JSONObject): String? {
+    if (!document.has("AuthorComments")) {
+        return null
+    }
+    val parts = mutableListOf<String>()
+    fun push(value: Any?) {
+        when (value) {
+            is String -> if (value.isNotBlank()) parts.add(value)
+            is JSONObject -> {
+                val content = value.opt("Content")
+                if (content is String && content.isNotBlank()) parts.add(content)
+            }
+        }
+    }
+    when (val value = document.opt("AuthorComments")) {
+        null, JSONObject.NULL -> return null
+        is JSONArray -> for (index in 0 until value.length()) push(value.opt(index))
+        else -> push(value)
+    }
+    return if (parts.isEmpty()) null else parts.joinToString("\n\n")
+}
+
 /** 用真实历史设备标识逐一校验单章并解码正文；所有候选失败则明确报错。 */
 fun decodeCachedChapter(raw: ByteArray, chapterId: String, title: String, userId: String, candidates: List<Pair<String, String>>): DecodedChapter {
     val cacheFields = readCacheFields(raw)
@@ -147,7 +170,7 @@ fun decodeCachedChapter(raw: ByteArray, chapterId: String, title: String, userId
         }
         val content = document["Content"]
         var copyrightMetadata: JSONObject? = null
-        val text = when {
+        var text = when {
             chapterId == "-10000" && content is JSONObject -> {
                 copyrightMetadata = content
                 renderCopyrightPage(content)
@@ -155,13 +178,20 @@ fun decodeCachedChapter(raw: ByteArray, chapterId: String, title: String, userId
             content is String -> content
             else -> throw ReaderCacheError("章节 Content 字段类型尚未支持：$chapterId")
         }
+        // 作者附言（AuthorComments）为辅助文本：可识别时附加为独立小节，不可识别时跳过。
+        authorCommentsText(document)?.let { comments ->
+            if (comments.isNotBlank()) {
+                text = "$text\n\n作者的话：\n$comments"
+            }
+        }
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
         if (text.isBlank() || text.contains('\uFFFD')) {
             throw ReaderCacheError("章节正文为空或含乱码替换字符：$chapterId")
         }
         if (text.any { it.code < 32 && it !in "\r\n\t" }) {
             throw ReaderCacheError("章节含不可显示控制字符：$chapterId")
         }
-        for (key in listOf("AuthorComments", "Resources", "Blocks")) {
+        for (key in listOf("Resources", "Blocks")) {
             if (!extraFieldEmpty(document, key)) {
                 throw ReaderCacheError("章节含尚未支持的非空 $key：$chapterId")
             }
@@ -169,7 +199,7 @@ fun decodeCachedChapter(raw: ByteArray, chapterId: String, title: String, userId
         return DecodedChapter(
             chapterId = chapterId,
             title = title,
-            text = text.replace("\r\n", "\n").replace("\r", "\n"),
+            text = text,
             sourceSha256 = MessageDigest.getInstance("SHA-256").digest(raw).joinToString("") { "%02x".format(it) },
             deviceSource = source,
             trailingBytes = cacheFields.trailing,
