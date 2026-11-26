@@ -33,6 +33,7 @@ data class BookDocument(
     val chapters: List<Chapter>,
     val expectedCount: Int?,
     val missingChapters: List<Map<String, Any?>>,
+    val failedChapters: List<Map<String, Any?>> = emptyList(),
     val metadata: Map<String, Any?> = emptyMap(),
     val diagnostics: List<String> = emptyList(),
 ) {

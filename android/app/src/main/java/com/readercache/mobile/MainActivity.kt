@@ -5,10 +5,10 @@ package com.readercache.mobile
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
-import android.text.method.ScrollingMovementMethod
 import android.view.View
 import android.widget.ArrayAdapter
 import android.widget.CheckBox
+import android.widget.ScrollView
 import android.widget.Spinner
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
@@ -41,6 +41,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvBookInfo: TextView
     private lateinit var tvStatus: TextView
     private lateinit var tvLog: TextView
+    private lateinit var scrollLog: ScrollView
     private lateinit var cbTxt: CheckBox
     private lateinit var cbMd: CheckBox
     private lateinit var cbEpub: CheckBox
@@ -74,12 +75,12 @@ class MainActivity : AppCompatActivity() {
         tvBookInfo = findViewById(R.id.tv_book_info)
         tvStatus = findViewById(R.id.tv_status)
         tvLog = findViewById(R.id.tv_log)
+        scrollLog = findViewById(R.id.scroll_log)
         cbTxt = findViewById(R.id.cb_txt)
         cbMd = findViewById(R.id.cb_md)
         cbEpub = findViewById(R.id.cb_epub)
         cbXhtml = findViewById(R.id.cb_xhtml)
         cbComplete = findViewById(R.id.cb_complete)
-        tvLog.movementMethod = ScrollingMovementMethod()
 
         // 显示真实版本号，便于区分安装的构建版本。
         val subtitle = findViewById<TextView>(R.id.tv_subtitle)
@@ -136,6 +137,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun appendLog(message: String) {
         tvLog.append(message + "\n")
+        // 新日志写入后自动滚到底部，长日志始终可见。
+        scrollLog.post { scrollLog.fullScroll(View.FOCUS_DOWN) }
     }
 
     private fun setStatus(message: String) {
@@ -238,7 +241,12 @@ class MainActivity : AppCompatActivity() {
                     )
                 }
                 setBusy(false)
-                setStatus("导出完成 · ${summary.chapterCount} 个目录项")
+                if (summary.failedCount > 0) {
+                    setStatus("导出完成 · ${summary.chapterCount} 个目录项 · 跳过 ${summary.failedCount} 章")
+                    appendLog("有 ${summary.failedCount} 章解码失败已跳过，明细见 conversion_report.json")
+                } else {
+                    setStatus("导出完成 · ${summary.chapterCount} 个目录项")
+                }
                 appendLog("输出目录：${summary.outputName}")
                 summary.missingCount?.let { appendLog("目录缺失 $it 项，详见 conversion_report.json") }
                 appendLog("生成文件：\n" + summary.files.joinToString("\n"))

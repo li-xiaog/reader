@@ -32,6 +32,7 @@ data class BackupInfo(
     val indexFamily: List<SafEntry>,
     val cacheEntry: SafEntry?,
     val configFamily: List<SafEntry>,
+    val extraConfigFamily: List<SafEntry> = emptyList(),
     val ready: Boolean,
     val statusNote: String,
 )
@@ -139,7 +140,7 @@ object QidianBackupReader {
             progress?.invoke("已从版权页识别 $identified 本书的书名与作者")
         }
         val books = pending
-            .map { it.toBackupInfo() }
+            .map { it.toBackupInfo(configs) }
             .sortedBy { it.title }
         if (books.isEmpty()) {
             progress?.invoke("所选目录中没有发现 qidian_book_metadata_*.json 或“数字.qd”索引文件")
@@ -262,8 +263,8 @@ object QidianBackupReader {
         }
     }
 
-    /** 汇总结构检查结果并生成不可变书目。 */
-    private fun PendingBook.toBackupInfo(): BackupInfo {
+    /** 汇总结构检查结果并生成不可变书目；其余 QDConfig 作为解密兜底候选。 */
+    private fun PendingBook.toBackupInfo(allConfigs: List<SafEntry>): BackupInfo {
         val cacheReady = cacheEntry != null
         val userReady = userDir.isNotEmpty() && userDir.all { it in '0'..'9' }
         val ready = indexFamily.isNotEmpty() && cacheReady && userReady && configFamily.isNotEmpty()
@@ -279,6 +280,7 @@ object QidianBackupReader {
             notes.add(QD_CONFIG_HINT)
         }
         val note = if (ready) "结构完整 · 可导出" else notes.joinToString("；")
+        val familyIds = configFamily.mapTo(mutableSetOf()) { it.documentId }
         return BackupInfo(
             bookId = bookId,
             title = title.ifBlank { "书籍 $bookId" },
@@ -288,6 +290,7 @@ object QidianBackupReader {
             indexFamily = indexFamily.toList(),
             cacheEntry = cacheEntry,
             configFamily = configFamily.toList(),
+            extraConfigFamily = allConfigs.filter { it.documentId !in familyIds },
             ready = ready,
             statusNote = note,
         )
@@ -302,9 +305,31 @@ object QidianBackupReader {
         }
         progress("读取章节索引：${info.bookId}.qd")
         val indexEntries = readIndexEntries(context, info)
-        val candidates = readDeviceCandidates(context, info)
+        val candidates = readDeviceCandidates(context, info).toMutableList()
+        // 兜底：目录树中其他 QDConfig 的历史设备标识也参与尝试（按设备值去重），
+        // 覆盖同一目录里混有旧安装 QDConfig 的情况。
+        if (info.extraConfigFamily.isNotEmpty()) {
+            val seenDevices = candidates.mapTo(mutableSetOf()) { it.first }
+            var added = 0
+            for (entry in info.extraConfigFamily) {
+                val extra = try {
+                    readCandidatesFromFamily(context, listOf(entry))
+                } catch (error: Exception) {
+                    emptyList()
+                }
+                for (pair in extra) {
+                    if (seenDevices.add(pair.first)) {
+                        candidates.add(pair)
+                        added += 1
+                    }
+                }
+            }
+            if (added > 0) {
+                progress("已并入其他 QDConfig 的 $added 个历史设备标识作为兜底候选")
+            }
+        }
 
-        // 2. 逐章严格解码；缺失只记录，损坏或未知结构直接报错。
+        // 2. 逐章解码；缺失与单章解码失败只记录并跳过，不中断整本书导出。
         val files = SafTree.children(context, treeUri, cacheEntry.documentId)
             .filterValues { !it.isDirectory && it.name.endsWith(".qd") }
         val orphanIds = files.keys.map { it.removeSuffix(".qd") }.toSet() -
@@ -318,6 +343,7 @@ object QidianBackupReader {
 
         val chapters = mutableListOf<Chapter>()
         val missing = mutableListOf<Map<String, Any?>>()
+        val broken = mutableListOf<Map<String, Any?>>()
         for ((position, item) in indexEntries.withIndex()) {
             val cacheEntryItem = files["${item.chapterId}.qd"]
             if (cacheEntryItem == null) {
@@ -333,7 +359,24 @@ object QidianBackupReader {
                 continue
             }
             val raw = SafTree.readBytes(context, cacheEntryItem.documentUri)
-            val decoded = decodeCachedChapter(raw, item.chapterId, item.title, info.qdUserDir, candidates)
+            // 单章解码失败只跳过并记录，不再中断整本书导出；全部失败时在下方汇总报错。
+            val decoded = try {
+                decodeCachedChapter(raw, item.chapterId, item.title, info.qdUserDir, candidates)
+            } catch (error: ReaderCacheError) {
+                val reason = error.message ?: "未知原因"
+                broken.add(
+                    linkedMapOf(
+                        "chapter_id" to item.chapterId,
+                        "title" to item.title,
+                        "is_vip" to item.isVip,
+                        "volume" to item.volume,
+                        "order" to item.order,
+                        "reason" to reason,
+                    ),
+                )
+                progress("警告：跳过无法解码的章节《${item.title}》（${item.chapterId}）：$reason")
+                continue
+            }
             val chapterMetadata = mutableMapOf<String, Any?>(
                 "chapter_id" to item.chapterId,
                 "title" to item.title,
@@ -373,7 +416,15 @@ object QidianBackupReader {
                 progress("提示：缓存中没有版权页，书籍标题以编号代替")
             }
         }
-        progress("起点：${chapters.size} 个缓存项已校验，目录缺失 ${missing.size} 项")
+        if (chapters.isEmpty()) {
+            val samples = broken.take(3).joinToString("；") { "${it["chapter_id"]}《${it["title"]}》" }
+            throw ReaderCacheError(
+                "缓存中的 ${broken.size} 个章节全部无法解码，没有可导出内容（示例：$samples）。" +
+                    "常见原因：模拟器重装更换设备标识或账号后旧章节密钥不匹配、缓存复制到手机时中断。" +
+                    "可用桌面工具打开同一备份对照，或回到模拟器重新缓存这些章节。",
+            )
+        }
+        progress("起点：${chapters.size} 个缓存项已校验，目录缺失 ${missing.size} 项，解码失败跳过 ${broken.size} 项")
         return BookDocument(
             bookId = info.bookId,
             title = title,
@@ -381,6 +432,7 @@ object QidianBackupReader {
             chapters = chapters,
             expectedCount = indexEntries.size,
             missingChapters = missing,
+            failedChapters = broken,
             metadata = mapOf(
                 "verified_app_version" to "7.9.460",
                 "cache_layout" to "length-prefixed-v1",

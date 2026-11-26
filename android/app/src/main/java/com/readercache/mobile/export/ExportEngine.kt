@@ -18,6 +18,7 @@ data class ExportSummary(
     val outputName: String,
     val chapterCount: Int,
     val missingCount: Int?,
+    val failedCount: Int = 0,
     val files: List<String>,
 )
 
@@ -98,6 +99,7 @@ class ExportEngine(private val context: Context) {
                 outputName = outputName,
                 chapterCount = book.chapters.size,
                 missingCount = book.missingCount,
+                failedCount = book.failedChapters.size,
                 files = relativeFiles,
             )
         } finally {

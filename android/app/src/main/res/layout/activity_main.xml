@@ -169,17 +169,21 @@
             android:textSize="14sp"
             android:textStyle="bold" />
 
-        <TextView
-            android:id="@+id/tv_log"
+        <ScrollView
+            android:id="@+id/scroll_log"
             android:layout_width="match_parent"
             android:layout_height="220dp"
             android:layout_marginTop="8dp"
             android:background="#FFFFFF"
-            android:gravity="top"
-            android:padding="12dp"
-            android:scrollbars="vertical"
-            android:textColor="#203343"
-            android:textIsSelectable="true"
-            android:textSize="12sp" />
+            android:scrollbars="vertical">
+
+            <TextView
+                android:id="@+id/tv_log"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:padding="12dp"
+                android:textColor="#203343"
+                android:textSize="12sp" />
+        </ScrollView>
     </LinearLayout>
 </ScrollView>

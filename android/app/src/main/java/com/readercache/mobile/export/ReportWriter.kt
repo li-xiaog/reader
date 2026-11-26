@@ -50,6 +50,8 @@ fun writeReports(book: BookDocument, directory: File, outputs: List<File>): File
     report.put("expected_count", book.expectedCount ?: JSONObject.NULL)
     report.put("missing_count", book.missingCount ?: JSONObject.NULL)
     report.put("missing_chapters", JSONArray(book.missingChapters.map { jsonObjectOf(it) }))
+    report.put("failed_count", book.failedChapters.size)
+    report.put("failed_chapters", JSONArray(book.failedChapters.map { jsonObjectOf(it) }))
     report.put("diagnostics", JSONArray(book.diagnostics))
     report.put("metadata", jsonObjectOf(book.metadata))
     report.put("replacement_characters", 0)

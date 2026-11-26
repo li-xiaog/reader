@@ -206,5 +206,8 @@ fun decodeCachedChapter(raw: ByteArray, chapterId: String, title: String, userId
             copyrightMetadata = copyrightMetadata,
         )
     }
-    throw ReaderCacheError("章节 $chapterId 没有匹配的设备标识，或缓存损坏")
+    throw ReaderCacheError(
+        "章节 $chapterId 没有匹配的设备标识，或缓存损坏" +
+            "（已尝试 ${candidates.size} 个设备标识；常见原因：模拟器重装更换设备或账号后旧章节密钥不匹配、缓存复制中断）",
+    )
 }
