@@ -1,12 +1,11 @@
-"""起点备份读取器：智能扫描手动选择的目录、核对结构并解码为统一书籍模型。
-
-扫描规则与桌面版 local_source.py 一致，支持三种目录形态：
-1. 桌面工具备份目录（qidian_book_metadata_{ID}.json + book_index + book_cache + database/databases）；
-2. 从模拟器手动复制的原始 QDReader/book 布局（{用户目录}/{书籍ID}.qd 索引 + 同名缓存子目录）；
-3. 上述目录的任意上级目录（一次扫描可发现多本书）。
-
-QDConfig 设备标识数据库（解密必需）可位于所选目录树任意位置。
-"""
+// 起点备份读取器：智能扫描手动选择的目录、核对结构并解码为统一书籍模型。
+//
+// 扫描规则与桌面版 local_source.py 一致，支持三种目录形态：
+// 1. 桌面工具备份目录（qidian_book_metadata_{ID}.json + book_index + book_cache + database/databases）；
+// 2. 从模拟器手动复制的原始 QDReader/book 布局（{用户目录}/{书籍ID}.qd 索引 + 同名缓存子目录）；
+// 3. 上述目录的任意上级目录（一次扫描可发现多本书）。
+//
+// QDConfig 设备标识数据库（解密必需）可位于所选目录树任意位置。
 
 package com.readercache.mobile.qidian
 
